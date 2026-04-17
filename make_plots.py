@@ -1,252 +1,226 @@
-import pandas as pd
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
+#!/usr/bin/env python3
+"""
+make_plots.py — Generate all plots for Milestone 3 report.
+
+1. Position time-series (pelvis): True vs Noisy vs LKF vs EKF
+2. Velocity, Acceleration, Jerk (pelvis): LKF vs EKF
+3. Per-joint RMSE bar chart
+4. MS2 vs MS3 comparison overlay (numerical verification visual)
+"""
+
+import csv
+import sys
 import os
+import math
 
-OUT = '/mnt/user-data/outputs/figures'
-os.makedirs(OUT, exist_ok=True)
+# Try importing matplotlib; if unavailable, print message
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import numpy as np
+    HAS_MPL = True
+except ImportError:
+    HAS_MPL = False
+    print("matplotlib/numpy not available. Install with:")
+    print("  pip3 install matplotlib numpy")
+    sys.exit(1)
 
-# ── Load ───────────────────────────────────────────────────────────────────
-lkf   = pd.read_csv('/mnt/user-data/uploads/lkf_output__1_.csv')
-ekf   = pd.read_csv('/mnt/user-data/uploads/ekf_output__1_.csv')
-true_ = pd.read_csv('/mnt/user-data/uploads/3D_Full_Body_Humain_Gait_Walking_Dataset__True_Values_.csv')
-noisy = pd.read_csv('/mnt/user-data/uploads/3D_Full_Body_Humain_Gait_Walking_Dataset__Noisy_Values_.csv')
-
-JOINTS = ['pelvis','L5','L3','T12','T8','neck','head',
-          'shoulderRight','upperArmRight','forearmRight','handRight',
-          'shoulderLeft','upperArmLeft','forearmLeft','handLeft',
-          'upperLegRight','lowerLegRight','footRight','toeRight',
-          'upperLegLeft','lowerLegLeft','footLeft','toeLeft']
-
+NUM_JOINTS = 23
+STATE_PER_JOINT = 12
 DT = 0.01
-T  = len(lkf)
-t  = np.arange(T) * DT
 
-# ── Global style ───────────────────────────────────────────────────────────
-plt.rcParams.update({
-    'font.family'       : 'DejaVu Serif',
-    'font.size'         : 10,
-    'axes.spines.top'   : False,
-    'axes.spines.right' : False,
-    'axes.linewidth'    : 0.8,
-    'axes.labelsize'    : 10,
-    'xtick.major.width' : 0.7,
-    'ytick.major.width' : 0.7,
-    'xtick.labelsize'   : 8.5,
-    'ytick.labelsize'   : 8.5,
-    'lines.linewidth'   : 1.4,
-    'legend.frameon'    : True,
-    'legend.framealpha' : 0.85,
-    'legend.edgecolor'  : '#cccccc',
-    'legend.fontsize'   : 8.5,
-    'figure.dpi'        : 180,
-    'savefig.dpi'       : 180,
-})
+JOINT_NAMES = [
+    "pelvis","L5","L3","T12","T8","neck","head",
+    "shoulderRight","upperArmRight","forearmRight","handRight",
+    "shoulderLeft","upperArmLeft","forearmLeft","handLeft",
+    "upperLegRight","lowerLegRight","footRight","toeRight",
+    "upperLegLeft","lowerLegLeft","footLeft","toeLeft"
+]
 
-# Palette — high contrast, works when printed
-C_TRUE  = '#145a32'   # dark green
-C_NOISY = '#aab7b8'   # light grey
-C_LKF   = '#154360'   # dark navy
-C_EKF   = '#b03a2e'   # dark red
 
-JOINT = 'pelvis'
+def load_state_csv(path):
+    """Returns (T, 276) numpy array of states."""
+    data = []
+    with open(path) as f:
+        reader = csv.reader(f)
+        next(reader)
+        for row in reader:
+            data.append([float(v) for v in row[1:]])
+    return np.array(data)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURE 1 — Position time-series: True / Noisy / LKF / EKF
-# ─────────────────────────────────────────────────────────────────────────────
-fig, axes = plt.subplots(3, 1, figsize=(8.5, 7), sharex=True,
-                         gridspec_kw={'hspace': 0.08})
-fig.subplots_adjust(top=0.93, bottom=0.09, left=0.10, right=0.97)
 
-ylabels = [r'$p_x$ (m)', r'$p_y$ (m)', r'$p_z$ (m)']
-ax_keys = ['x', 'y', 'z']
+def load_meas_csv(path):
+    """Returns (T, 23, 3) numpy array of positions."""
+    data = []
+    with open(path) as f:
+        reader = csv.reader(f)
+        next(reader)
+        for row in reader:
+            vals = [float(v) for v in row]
+            frame = np.array(vals).reshape(NUM_JOINTS, 3)
+            data.append(frame)
+    return np.array(data)
 
-for i, (ax_lbl, ylab) in enumerate(zip(ax_keys, ylabels)):
-    ax = axes[i]
-    ax.plot(t, noisy[f'{JOINT}_{ax_lbl}'],   color=C_NOISY, lw=0.6, alpha=0.85, label='Noisy',  zorder=1)
-    ax.plot(t, true_[f'{JOINT}_{ax_lbl}'],   color=C_TRUE,  lw=1.8,             label='True',   zorder=4)
-    ax.plot(t, lkf[f'{JOINT}_p{ax_lbl}'],    color=C_LKF,   lw=1.3,             label='LKF',    zorder=3)
-    ax.plot(t, ekf[f'{JOINT}_p{ax_lbl}'],    color=C_EKF,   lw=1.1, ls='--',    label='EKF',    zorder=2)
-    ax.set_ylabel(ylab)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(4, prune='both'))
-    ax.tick_params(axis='x', labelbottom=(i==2))
 
-axes[0].legend(ncol=4, loc='upper right', bbox_to_anchor=(1.0, 1.35),
-               fontsize=8.5, handlelength=2.2)
-axes[2].set_xlabel('Time (s)')
-fig.suptitle('Figure 1 — Position Estimates: Pelvis Joint', fontsize=11, fontweight='bold', y=0.98)
+def extract_joint(states, j, comp):
+    """Extract component from joint j. comp: 0=px,1=vx,...,11=jz"""
+    return states[:, j * STATE_PER_JOINT + comp]
 
-fig.savefig(f'{OUT}/fig1_position.pdf', bbox_inches='tight')
-fig.savefig(f'{OUT}/fig1_position.png', bbox_inches='tight')
-plt.close()
-print('✓ fig1_position')
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURE 2 — True vs Noisy vs Estimated (zoomed view, cleaner comparison)
-# ─────────────────────────────────────────────────────────────────────────────
-fig, axes = plt.subplots(3, 1, figsize=(8.5, 7), sharex=True,
-                         gridspec_kw={'hspace': 0.08})
-fig.subplots_adjust(top=0.93, bottom=0.09, left=0.10, right=0.97)
+def plot_position_timeseries(true_pos, noisy_pos, lkf, ekf, joint_idx, outdir):
+    """Figure 1: Position x,y,z for one joint."""
+    T = lkf.shape[0]
+    t = np.arange(T) * DT
+    labels = ['$p_x$', '$p_y$', '$p_z$']
+    comps = [0, 4, 8]  # px, py, pz offsets
 
-for i, (ax_lbl, ylab) in enumerate(zip(ax_keys, ylabels)):
-    ax = axes[i]
-    # Shade noisy region
-    ax.fill_between(t, noisy[f'{JOINT}_{ax_lbl}'], true_[f'{JOINT}_{ax_lbl}'],
-                    color=C_NOISY, alpha=0.25, label='Noise band')
-    ax.plot(t, noisy[f'{JOINT}_{ax_lbl}'],  color=C_NOISY, lw=0.5, alpha=0.7)
-    ax.plot(t, true_[f'{JOINT}_{ax_lbl}'],  color=C_TRUE,  lw=2.0,         label='True',  zorder=4)
-    ax.plot(t, lkf[f'{JOINT}_p{ax_lbl}'],   color=C_LKF,   lw=1.4,         label='LKF',   zorder=3)
-    ax.plot(t, ekf[f'{JOINT}_p{ax_lbl}'],   color=C_EKF,   lw=1.1, ls='--',label='EKF',   zorder=2)
-    ax.set_ylabel(ylab)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(4, prune='both'))
-    ax.tick_params(axis='x', labelbottom=(i==2))
+    fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+    fig.suptitle(f'Position Estimates: {JOINT_NAMES[joint_idx]}', fontsize=14)
 
-axes[0].legend(ncol=4, loc='upper right', bbox_to_anchor=(1.0, 1.35),
-               fontsize=8.5, handlelength=2.2)
-axes[2].set_xlabel('Time (s)')
-fig.suptitle('Figure 2 — True vs Noisy vs Estimated Position: Pelvis Joint',
-             fontsize=11, fontweight='bold', y=0.98)
+    for i, (ax, label, c) in enumerate(zip(axes, labels, comps)):
+        lkf_pos = extract_joint(lkf, joint_idx, c)
+        ekf_pos = extract_joint(ekf, joint_idx, c)
+        ax.plot(t, noisy_pos[:, joint_idx, i], color='0.75', lw=0.3, label='Noisy')
+        ax.plot(t, true_pos[:, joint_idx, i], color='green', lw=1.5, label='True')
+        ax.plot(t, lkf_pos, color='navy', lw=1.0, label='LKF')
+        ax.plot(t, ekf_pos, color='red', lw=0.8, ls='--', label='EKF')
+        ax.set_ylabel(f'{label} (m)')
+        if i == 0:
+            ax.legend(loc='upper right', fontsize=8)
+    axes[-1].set_xlabel('Time (s)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'fig1_position.png'), dpi=150)
+    plt.close()
+    print("  Saved fig1_position.png")
 
-fig.savefig(f'{OUT}/fig2_true_noisy_estimated.pdf', bbox_inches='tight')
-fig.savefig(f'{OUT}/fig2_true_noisy_estimated.png', bbox_inches='tight')
-plt.close()
-print('✓ fig2_true_noisy_estimated')
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURE 3 — Velocity
-# ─────────────────────────────────────────────────────────────────────────────
-fig, axes = plt.subplots(3, 1, figsize=(8.5, 7), sharex=True,
-                         gridspec_kw={'hspace': 0.08})
-fig.subplots_adjust(top=0.93, bottom=0.09, left=0.11, right=0.97)
+def plot_derivatives(lkf, ekf, joint_idx, outdir):
+    """Figures 3-5: Velocity, Acceleration, Jerk."""
+    T = lkf.shape[0]
+    t = np.arange(T) * DT
 
-vylabels = [r'$v_x$ (m/s)', r'$v_y$ (m/s)', r'$v_z$ (m/s)']
-for i, (ax_lbl, ylab) in enumerate(zip(ax_keys, vylabels)):
-    ax = axes[i]
-    ax.axhline(0, color='#cccccc', lw=0.7, zorder=0)
-    ax.plot(t, lkf[f'{JOINT}_v{ax_lbl}'], color=C_LKF, lw=1.4,         label='LKF')
-    ax.plot(t, ekf[f'{JOINT}_v{ax_lbl}'], color=C_EKF, lw=1.1, ls='--',label='EKF')
-    ax.set_ylabel(ylab)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(5, prune='both'))
-    ax.tick_params(axis='x', labelbottom=(i==2))
+    for deriv_name, offsets, unit, fignum in [
+        ('Velocity',     [1,5,9],   'm/s',    'fig3_velocity'),
+        ('Acceleration', [2,6,10],  'm/s²',   'fig4_acceleration'),
+        ('Jerk',         [3,7,11],  'm/s³',   'fig5_jerk'),
+    ]:
+        fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+        fig.suptitle(f'{deriv_name} Estimates: {JOINT_NAMES[joint_idx]}', fontsize=14)
+        axis_labels = ['x', 'y', 'z']
+        for i, (ax, off) in enumerate(zip(axes, offsets)):
+            lkf_d = extract_joint(lkf, joint_idx, off)
+            ekf_d = extract_joint(ekf, joint_idx, off)
+            ax.plot(t, lkf_d, color='navy', lw=1.0, label='LKF')
+            ax.plot(t, ekf_d, color='red', lw=0.8, ls='--', label='EKF')
+            ax.set_ylabel(f'{axis_labels[i]} ({unit})')
+            if i == 0:
+                ax.legend(loc='upper right', fontsize=8)
+        axes[-1].set_xlabel('Time (s)')
+        plt.tight_layout()
+        plt.savefig(os.path.join(outdir, f'{fignum}.png'), dpi=150)
+        plt.close()
+        print(f"  Saved {fignum}.png")
 
-axes[0].legend(ncol=2, loc='upper right', bbox_to_anchor=(1.0, 1.35),
-               fontsize=8.5, handlelength=2.2)
-axes[2].set_xlabel('Time (s)')
-fig.suptitle('Figure 3 — Velocity Estimates: Pelvis Joint',
-             fontsize=11, fontweight='bold', y=0.98)
 
-fig.savefig(f'{OUT}/fig3_velocity.pdf', bbox_inches='tight')
-fig.savefig(f'{OUT}/fig3_velocity.png', bbox_inches='tight')
-plt.close()
-print('✓ fig3_velocity')
+def plot_rmse_bar(true_pos, noisy_pos, lkf, ekf, outdir):
+    """Figure 6: Per-joint RMSE bar chart."""
+    T = lkf.shape[0]
+    rmse_noisy = np.zeros(NUM_JOINTS)
+    rmse_lkf = np.zeros(NUM_JOINTS)
+    rmse_ekf = np.zeros(NUM_JOINTS)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURE 4 — Acceleration
-# ─────────────────────────────────────────────────────────────────────────────
-fig, axes = plt.subplots(3, 1, figsize=(8.5, 7), sharex=True,
-                         gridspec_kw={'hspace': 0.08})
-fig.subplots_adjust(top=0.93, bottom=0.09, left=0.11, right=0.97)
+    for j in range(NUM_JOINTS):
+        for ax_i, comp in enumerate([0, 4, 8]):
+            diff_n = noisy_pos[:, j, ax_i] - true_pos[:, j, ax_i]
+            diff_l = extract_joint(lkf, j, comp) - true_pos[:, j, ax_i]
+            diff_e = extract_joint(ekf, j, comp) - true_pos[:, j, ax_i]
+            rmse_noisy[j] += np.mean(diff_n**2)
+            rmse_lkf[j]   += np.mean(diff_l**2)
+            rmse_ekf[j]   += np.mean(diff_e**2)
+        rmse_noisy[j] = np.sqrt(rmse_noisy[j] / 3) * 1000  # mm
+        rmse_lkf[j]   = np.sqrt(rmse_lkf[j]   / 3) * 1000
+        rmse_ekf[j]   = np.sqrt(rmse_ekf[j]   / 3) * 1000
 
-aylabels = [r'$a_x$ (m/s²)', r'$a_y$ (m/s²)', r'$a_z$ (m/s²)']
-for i, (ax_lbl, ylab) in enumerate(zip(ax_keys, aylabels)):
-    ax = axes[i]
-    ax.axhline(0, color='#cccccc', lw=0.7, zorder=0)
-    ax.plot(t, lkf[f'{JOINT}_a{ax_lbl}'], color=C_LKF, lw=1.4,         label='LKF')
-    ax.plot(t, ekf[f'{JOINT}_a{ax_lbl}'], color=C_EKF, lw=1.1, ls='--',label='EKF')
-    ax.set_ylabel(ylab)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(5, prune='both'))
-    ax.tick_params(axis='x', labelbottom=(i==2))
+    x = np.arange(NUM_JOINTS)
+    w = 0.25
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.bar(x - w, rmse_noisy, w, label=f'Noisy (mean {np.mean(rmse_noisy):.0f} mm)', color='0.7')
+    ax.bar(x,     rmse_lkf,   w, label=f'LKF (mean {np.mean(rmse_lkf):.0f} mm)', color='navy')
+    ax.bar(x + w, rmse_ekf,   w, label=f'EKF (mean {np.mean(rmse_ekf):.0f} mm)', color='red')
+    ax.set_xticks(x)
+    ax.set_xticklabels(JOINT_NAMES, rotation=45, ha='right', fontsize=7)
+    ax.set_ylabel('Position RMSE (mm)')
+    ax.set_title('Per-Joint Position RMSE: Noisy vs LKF vs EKF')
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, 'fig6_rmse_bar.png'), dpi=150)
+    plt.close()
+    print("  Saved fig6_rmse_bar.png")
 
-axes[0].legend(ncol=2, loc='upper right', bbox_to_anchor=(1.0, 1.35),
-               fontsize=8.5, handlelength=2.2)
-axes[2].set_xlabel('Time (s)')
-fig.suptitle('Figure 4 — Acceleration Estimates: Pelvis Joint',
-             fontsize=11, fontweight='bold', y=0.98)
 
-fig.savefig(f'{OUT}/fig4_acceleration.pdf', bbox_inches='tight')
-fig.savefig(f'{OUT}/fig4_acceleration.png', bbox_inches='tight')
-plt.close()
-print('✓ fig4_acceleration')
+def plot_ms2_vs_ms3(ms2_states, ms3_states, label, joint_idx, outdir):
+    """Comparison overlay: MS2 (C++) vs MS3 (ASM) for visual verification."""
+    T = ms2_states.shape[0]
+    t = np.arange(T) * DT
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURE 5 — Jerk
-# ─────────────────────────────────────────────────────────────────────────────
-fig, axes = plt.subplots(3, 1, figsize=(8.5, 7), sharex=True,
-                         gridspec_kw={'hspace': 0.08})
-fig.subplots_adjust(top=0.93, bottom=0.09, left=0.12, right=0.97)
+    fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
+    fig.suptitle(f'MS2 (C++) vs MS3 (ASM) — {label} — {JOINT_NAMES[joint_idx]}', fontsize=13)
+    for i, (ax, comp, name) in enumerate(zip(axes, [0,4,8], ['$p_x$','$p_y$','$p_z$'])):
+        ms2_v = extract_joint(ms2_states, joint_idx, comp)
+        ms3_v = extract_joint(ms3_states, joint_idx, comp)
+        ax.plot(t, ms2_v, color='navy', lw=1.5, label='MS2 (C++)')
+        ax.plot(t, ms3_v, color='red', lw=0.8, ls='--', label='MS3 (ASM)')
+        ax.set_ylabel(f'{name} (m)')
+        if i == 0:
+            ax.legend(fontsize=8)
+    axes[-1].set_xlabel('Time (s)')
+    plt.tight_layout()
+    fname = f'fig_compare_{label.lower()}.png'
+    plt.savefig(os.path.join(outdir, fname), dpi=150)
+    plt.close()
+    print(f"  Saved {fname}")
 
-jylabels = [r'$j_x$ (m/s³)', r'$j_y$ (m/s³)', r'$j_z$ (m/s³)']
-for i, (ax_lbl, ylab) in enumerate(zip(ax_keys, jylabels)):
-    ax = axes[i]
-    ax.axhline(0, color='#cccccc', lw=0.7, zorder=0)
-    ax.plot(t, lkf[f'{JOINT}_j{ax_lbl}'], color=C_LKF, lw=1.4,         label='LKF')
-    ax.plot(t, ekf[f'{JOINT}_j{ax_lbl}'], color=C_EKF, lw=1.1, ls='--',label='EKF')
-    ax.set_ylabel(ylab)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(5, prune='both'))
-    ax.tick_params(axis='x', labelbottom=(i==2))
 
-axes[0].legend(ncol=2, loc='upper right', bbox_to_anchor=(1.0, 1.35),
-               fontsize=8.5, handlelength=2.2)
-axes[2].set_xlabel('Time (s)')
-fig.suptitle('Figure 5 — Jerk Estimates: Pelvis Joint',
-             fontsize=11, fontweight='bold', y=0.98)
+def main():
+    if len(sys.argv) < 5:
+        print("Usage: python3 make_plots.py <true.csv> <noisy.csv> "
+              "<lkf_asm.csv> <ekf_asm.csv> [lkf_ms2.csv] [ekf_ms2.csv]")
+        sys.exit(1)
 
-fig.savefig(f'{OUT}/fig5_jerk.pdf', bbox_inches='tight')
-fig.savefig(f'{OUT}/fig5_jerk.png', bbox_inches='tight')
-plt.close()
-print('✓ fig5_jerk')
+    true_path  = sys.argv[1]
+    noisy_path = sys.argv[2]
+    lkf_path   = sys.argv[3]
+    ekf_path   = sys.argv[4]
+    lkf_ms2    = sys.argv[5] if len(sys.argv) > 5 else None
+    ekf_ms2    = sys.argv[6] if len(sys.argv) > 6 else None
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURE 6 — Per-joint RMSE bar chart
-# ─────────────────────────────────────────────────────────────────────────────
-lkf_rmse, ekf_rmse, noisy_rmse = [], [], []
-for j in JOINTS:
-    tx = true_[f'{j}_x'].values; ty = true_[f'{j}_y'].values; tz = true_[f'{j}_z'].values
-    nx = noisy[f'{j}_x'].values; ny = noisy[f'{j}_y'].values; nz = noisy[f'{j}_z'].values
-    lx = lkf[f'{j}_px'].values;  ly = lkf[f'{j}_py'].values;  lz = lkf[f'{j}_pz'].values
-    ex = ekf[f'{j}_px'].values;  ey = ekf[f'{j}_py'].values;  ez = ekf[f'{j}_pz'].values
-    noisy_rmse.append(np.sqrt(np.mean((nx-tx)**2+(ny-ty)**2+(nz-tz)**2))*1000)
-    lkf_rmse.append  (np.sqrt(np.mean((lx-tx)**2+(ly-ty)**2+(lz-tz)**2))*1000)
-    ekf_rmse.append  (np.sqrt(np.mean((ex-tx)**2+(ey-ty)**2+(ez-tz)**2))*1000)
+    outdir = 'plots'
+    os.makedirs(outdir, exist_ok=True)
 
-print(f'  Global RMSE — Noisy: {np.mean(noisy_rmse):.1f} mm | '
-      f'LKF: {np.mean(lkf_rmse):.1f} mm | EKF: {np.mean(ekf_rmse):.1f} mm')
+    print("Loading data...")
+    true_pos  = load_meas_csv(true_path)
+    noisy_pos = load_meas_csv(noisy_path)
+    lkf = load_state_csv(lkf_path)
+    ekf = load_state_csv(ekf_path)
 
-# Short joint labels
-SHORT = ['pelvis','L5','L3','T12','T8','neck','head',
-         'shldr-R','uArm-R','fArm-R','hand-R',
-         'shldr-L','uArm-L','fArm-L','hand-L',
-         'uLeg-R','lLeg-R','foot-R','toe-R',
-         'uLeg-L','lLeg-L','foot-L','toe-L']
+    joint = 0  # pelvis
 
-x_pos = np.arange(len(JOINTS))
-w = 0.27
+    print("Generating plots...")
+    plot_position_timeseries(true_pos, noisy_pos, lkf, ekf, joint, outdir)
+    plot_derivatives(lkf, ekf, joint, outdir)
+    plot_rmse_bar(true_pos, noisy_pos, lkf, ekf, outdir)
 
-fig, ax = plt.subplots(figsize=(13, 4.5))
-fig.subplots_adjust(bottom=0.22, left=0.07, right=0.97, top=0.88)
+    # MS2 vs MS3 comparison
+    if lkf_ms2 and os.path.exists(lkf_ms2):
+        lkf_ms2_data = load_state_csv(lkf_ms2)
+        plot_ms2_vs_ms3(lkf_ms2_data, lkf, 'LKF', joint, outdir)
+    if ekf_ms2 and os.path.exists(ekf_ms2):
+        ekf_ms2_data = load_state_csv(ekf_ms2)
+        plot_ms2_vs_ms3(ekf_ms2_data, ekf, 'EKF', joint, outdir)
 
-b1 = ax.bar(x_pos - w,   noisy_rmse, w, color=C_NOISY, label=f'Noisy  (mean {np.mean(noisy_rmse):.0f} mm)', alpha=0.9, edgecolor='#888', linewidth=0.4)
-b2 = ax.bar(x_pos,       lkf_rmse,   w, color=C_LKF,   label=f'LKF    (mean {np.mean(lkf_rmse):.0f} mm)',   edgecolor='#0a2340', linewidth=0.4)
-b3 = ax.bar(x_pos + w,   ekf_rmse,   w, color=C_EKF,   label=f'EKF    (mean {np.mean(ekf_rmse):.0f} mm)',   edgecolor='#7b241c', linewidth=0.4, alpha=0.9)
+    print("Done!")
 
-ax.set_xticks(x_pos)
-ax.set_xticklabels(SHORT, rotation=42, ha='right', fontsize=8)
-ax.set_ylabel('Position RMSE (mm)', fontsize=10)
-ax.set_title('Figure 6 — Per-Joint Position RMSE: Noisy vs LKF vs EKF',
-             fontsize=11, fontweight='bold', pad=10)
-ax.legend(fontsize=9, loc='upper right')
-ax.yaxis.set_major_locator(ticker.MultipleLocator(100))
-ax.yaxis.grid(True, linestyle='--', linewidth=0.5, alpha=0.6)
-ax.set_axisbelow(True)
-ax.spines['top'].set_visible(False)
-ax.spines['right'].set_visible(False)
 
-fig.savefig(f'{OUT}/fig6_rmse_per_joint.pdf', bbox_inches='tight')
-fig.savefig(f'{OUT}/fig6_rmse_per_joint.png', bbox_inches='tight')
-plt.close()
-print('✓ fig6_rmse_per_joint')
-
-print(f'\nAll 6 figures saved to {OUT}')
+if __name__ == "__main__":
+    main()
