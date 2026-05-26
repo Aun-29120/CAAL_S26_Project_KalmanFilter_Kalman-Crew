@@ -1,0 +1,89 @@
+==============================================================================
+ Kalman Filter — Milestone 4 Performance Analysis
+ Scalar binaries: ./lkf_scalar, ./ekf_scalar
+ Vector binaries: ./lkf_vector, ./ekf_vector
+ QEMU: qemu-riscv64  -cpu rv64,v=true,vlen=128
+ Runs per binary: 1
+==============================================================================
+
+==============================================================================
+INSTRUCTION COUNT — LKF
+==============================================================================
+  VLEN = 128 bits → 2 doubles per vector register at e64 (m1)
+  At LMUL=m4 each vector op covers 8 doubles.
+
+  Kernel           MS3 scalar                MS4 vector                  Static reduction
+  ---------------- ------------------------- ------------------------- ------------------
+  zero_mem              9 (0 vec / 9 scalar)      9 (3 vec / 6 scalar)           1.00x   
+  mat_add              13 (0 vec / 13 scalar)     13 (5 vec / 8 scalar)           1.00x   
+  mat_sub              13 (0 vec / 13 scalar)     13 (5 vec / 8 scalar)           1.00x   
+  mat_transpose        19 (0 vec / 19 scalar)     22 (3 vec / 19 scalar)           0.86x   
+  mat_mul              62 (0 vec / 62 scalar)     65 (8 vec / 57 scalar)           0.95x   
+  ldl_solve           195 (0 vec / 195 scalar)    201 (14 vec / 187 scalar)           0.97x   
+  ---------------- ------------------------- ------------------------- ------------------
+  TOTAL                                311                       323             0.96x   
+
+  Dynamic reduction estimate (per element, large-N limit):
+  formula:  reduction ~= (scalar_body * VL) / vector_body, with VL = 8
+  Kernel             Scalar body   Vector body    Est. reduction
+  ---------------- ------------- ------------- -----------------
+  zero_mem                     9             9            8.00x
+  mat_add                     13            13            8.00x
+  mat_sub                     13            13            8.00x
+  mat_transpose               19            22            6.91x
+  mat_mul                     62            65            7.63x
+  ldl_solve                  195           201            7.76x
+
+  This estimate is an upper bound for elementwise kernels
+  (mat_add, mat_sub, zero_mem). For mat_mul and ldl_solve
+  the realised speedup is lower because of remaining scalar
+  decision logic (zero-skip in mat_mul, pivoting + factorise
+  loops in ldl_solve / lu_solve).
+
+==============================================================================
+INSTRUCTION COUNT — EKF
+==============================================================================
+  VLEN = 128 bits → 2 doubles per vector register at e64 (m1)
+  At LMUL=m4 each vector op covers 8 doubles.
+
+  Kernel           MS3 scalar                MS4 vector                  Static reduction
+  ---------------- ------------------------- ------------------------- ------------------
+  zero_mem              9 (0 vec / 9 scalar)      9 (3 vec / 6 scalar)           1.00x   
+  mat_add              13 (0 vec / 13 scalar)     13 (5 vec / 8 scalar)           1.00x   
+  mat_sub              13 (0 vec / 13 scalar)     13 (5 vec / 8 scalar)           1.00x   
+  mat_transpose        19 (0 vec / 19 scalar)     22 (3 vec / 19 scalar)           0.86x   
+  mat_mul              62 (0 vec / 62 scalar)     65 (8 vec / 57 scalar)           0.95x   
+  lu_solve            249 (0 vec / 249 scalar)    264 (27 vec / 237 scalar)           0.94x   
+  ---------------- ------------------------- ------------------------- ------------------
+  TOTAL                                365                       386             0.95x   
+
+  Dynamic reduction estimate (per element, large-N limit):
+  formula:  reduction ~= (scalar_body * VL) / vector_body, with VL = 8
+  Kernel             Scalar body   Vector body    Est. reduction
+  ---------------- ------------- ------------- -----------------
+  zero_mem                     9             9            8.00x
+  mat_add                     13            13            8.00x
+  mat_sub                     13            13            8.00x
+  mat_transpose               19            22            6.91x
+  mat_mul                     62            65            7.63x
+  lu_solve                   249           264            7.55x
+
+  This estimate is an upper bound for elementwise kernels
+  (mat_add, mat_sub, zero_mem). For mat_mul and ldl_solve
+  the realised speedup is lower because of remaining scalar
+  decision logic (zero-skip in mat_mul, pivoting + factorise
+  loops in ldl_solve / lu_solve).
+
+==============================================================================
+RUNTIME — wall-clock under QEMU
+==============================================================================
+  Filter           MS3 scalar (s)       MS4 vector (s)      Speedup
+  ---------- -------------------- -------------------- ------------
+  LKF               104.244 ± 0.000          482.315 ± 0.000         0.22x
+  EKF               260.199 ± 0.000         1000.901 ± 0.000         0.26x
+  ---------- -------------------- -------------------- ------------
+  TOTAL                   364.443             1483.216       0.25x
+
+  Note: QEMU emulates RVV in software; real hardware will be
+  faster. The instruction-count reduction is the more reliable
+  indicator of vectorisation effectiveness on real RVV CPUs.
